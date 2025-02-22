@@ -9,7 +9,7 @@ class Cliente:
         self.id = id
         self.host = host # ip
         self.porta = porta # porta
-        self.num_requisicoes = random.randint(10, 50) # número aleatório de requisições
+        self.num_requisicoes = random.randint(1, 4) # número aleatório de requisições
     
     def enviar_requisicao(self, connection):
         # Obtém o timestamp e envia para o nó 
@@ -21,10 +21,21 @@ class Cliente:
         connection.sendall(mensagem.encode())
 
     def esperar_resposta(self, connection):
-        # Espera a resposta do nó e exibe-a 
-        resposta = connection.recv(BUFFER_SIZE).decode()
-        resposta = json.loads(resposta)
-        print(f"Cliente {self.id} recebeu {resposta["status"]} do host {self.host}")
+        # Espera a resposta do nó e exibe-a
+        try:
+            resposta = connection.recv(BUFFER_SIZE)
+            
+            if not resposta: # se a resposta estiver vazia, a conexão foi fechada
+                print(f"Cliente {self.id}: conexão fechada pelo servidor.")
+                return
+            
+            resposta = json.loads(resposta.decode())
+            # print(f"Cliente {self.id} recebeu {resposta['status']} do host {self.host}")
+        
+        except ConnectionResetError:
+            print(f"Cliente {self.id}: conexão resetada pelo servidor.")
+        except Exception as e:
+            print(f"Erro ao receber resposta: {e}")
 
     def ficar_ocioso(self):
         tempo = random.uniform(1, 5)
@@ -32,16 +43,22 @@ class Cliente:
         time.sleep(tempo)
 
     def __call__(self):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as connection:
+        connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
             connection.connect((self.host, self.porta))
+            # print(f"Conectado ao nó {self.porta}")
             for _ in range(self.num_requisicoes):
                 self.enviar_requisicao(connection)
                 self.esperar_resposta(connection)
                 self.ficar_ocioso()
-
+        except Exception as e:
+            print(f"Erro na comunicação: {e}")
+        finally:
+            connection.close()
 
 if __name__ == "__main__":
     import sys
+    
     if len(sys.argv) != 4:
         print("Uso: python3 client.py <id_cliente> <host> <porta_no>")
         sys.exit(1)
