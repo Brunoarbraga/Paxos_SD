@@ -9,7 +9,7 @@ class Cliente:
         self.id = id
         self.host = host # ip
         self.porta = porta # porta
-        self.num_requisicoes = random.randint(1, 4) # número aleatório de requisições
+        self.num_requisicoes = random.randint(1, 1) # número aleatório de requisições
     
     def enviar_requisicao(self, connection):
         # Obtém o timestamp e envia para o nó 
@@ -26,16 +26,16 @@ class Cliente:
             resposta = connection.recv(BUFFER_SIZE)
             
             if not resposta: # se a resposta estiver vazia, a conexão foi fechada
-                print(f"Cliente {self.id}: conexão fechada pelo servidor.")
+                print(f"\033[31mCliente {self.id}: conexão fechada pelo servidor.\033[0m")
                 return
             
             resposta = json.loads(resposta.decode())
             # print(f"Cliente {self.id} recebeu {resposta['status']} do host {self.host}")
         
         except ConnectionResetError:
-            print(f"Cliente {self.id}: conexão resetada pelo servidor.")
+            print(f"\033[31mCliente {self.id}: conexão resetada pelo servidor.\033[0m")
         except Exception as e:
-            print(f"Erro ao receber resposta: {e}")
+            print(f"\033[31mErro ao receber resposta: {e}\033[0m")
 
     def ficar_ocioso(self):
         tempo = random.uniform(1, 5)
@@ -52,7 +52,7 @@ class Cliente:
                 self.esperar_resposta(connection)
                 self.ficar_ocioso()
         except Exception as e:
-            print(f"Erro na comunicação: {e}")
+            print(f"\033[31mErro na comunicação: {e}\033[0m")
         finally:
             connection.close()
 

@@ -5,8 +5,6 @@ import time
 import json
 from constants import *
 
-# from functools import partial
-
 # Define o tipo do nó
 class TipoNo (Enum):
     ACCEPTOR = 1
@@ -27,10 +25,12 @@ class NoP2P:
         self.porta_para_clientes = porta_para_clientes
         self.vizinhos = vizinhos # lista de 4 vizinhos (host, porta)
         self.sockets_ativos = [] # lista de conexões ativas
+        self.sockets_para_envio = []
         self.barrier = barrier # barrier para sincronização
         self.porta_cliente = porta_cliente
+        self.preparacao_enviada = False
         self.TID = None
-        self.valor = None
+        self.valor = None 
 
         # Cria socket para escutar conexões
         self.servidor_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -39,17 +39,41 @@ class NoP2P:
 
     def preparacao(self, mensagem):
         """ Envia uma mensagem para todos os vizinhos conectados """
-        for element in self.sockets_ativos:
-            # Impede que a mensagem de preparação seja enviada para um learner
+
+        for element in self.sockets_para_envio:
+
+            # Impede que a mensagem seja enviada para um learner
             if element['role'] == TipoNo.LEARNER:
                 continue
 
             # Envia a mensagem codificada
             try:
                 element['socket'].send(mensagem)
-                print(f"Mensagem enviada: {mensagem}")
+                print(f"Nó {self.id} enviando preparação: {mensagem}")
+
             except Exception as e:
-                print(f"Erro ao enviar mensagem: {e}")
+                print(f"\033[31mErro ao enviar preparação: {e}\033[0m")
+
+    def receber_preparacao(self):
+        """ Recebe mensagens de preparação dos outros nós """
+        
+        while True:
+            for element in self.sockets_ativos:
+                try:
+                    # Recebe a mensagem
+                    dados = element['socket'].recv(BUFFER_SIZE)
+                    if not dados:
+                        continue
+
+                    # Decodifica a mensagem
+                    mensagem = json.loads(dados.decode())
+                    print(f"\033[33mNó {self.id} recebeu preparação: {mensagem}\033[0m")
+
+                except Exception as e:
+                    print(f"\033[31mErro ao receber preparação: {e}\033[0m")
+                    continue
+                
+            # time.sleep(0.1)
 
     def conectar_com_clientes(self):
         """ Conecta-se a um cliente externo """
@@ -61,15 +85,21 @@ class NoP2P:
         conn, addr = self.cliente_socket.accept()
         print(f"Nó {self.id} conectado com o cliente {addr}")
 
+        # Loop que recebe requisições do cliente
         while True:
+
+            # Recebendo requisição
             dados = conn.recv(BUFFER_SIZE)
             if not dados:
-                break
+                break    
             mensagem = json.loads(dados.decode())
             timestamp = mensagem.get('timestamp')
-            print(f"Nó {self.id} recebeu request do cliente com timestamp {timestamp}")
+            print(f"\033[33mNó {self.id} recebeu request do cliente com timestamp {timestamp}\033[0m")
 
+            # Mandando preparação para os accepters
             self.preparacao(dados)
+            
+            #Mudar isso aqui depois, isso é pra falar pro cliente que deu certo
             conn.sendall(json.dumps({"status": "commited"}).encode())  
     
     def conectar_a_vizinhos(self):
@@ -89,24 +119,41 @@ class NoP2P:
                     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     sock.settimeout(5) # timeout para evitar bloqueio infinito
                     sock.connect(vizinho['ip_porta'])
-                    self.sockets_ativos.append({"socket" : sock, "role": vizinho['role']})
+
+                    sock.send(json.dumps({"id": self.id}).encode())
+
+                    self.sockets_ativos.append({"id" : vizinho['id'], "socket" : sock, "role": vizinho['role'], "recebeu_prep" : False})
                     print(f"Nó {self.id} conectado ao vizinho {vizinho['id']} - {vizinho['role']}")
                     break # se a conexão for bem sucedida, sai do loop
                 
                 except Exception as e:
-                    print(f"Erro ao conectar com {vizinho}: {e}. Tentando novamente em 2s...")
+                    print(f"\033[31mErro ao conectar com {vizinho}: {e}. Tentando novamente em 2s...\033[0m")
                     time.sleep(2)
 
     def aceitar_conexoes_vizinhos(self):
-        """ Escuta conexões de 4 outros nós """
+        """ Escuta conexões dos outros nós """
         self.barrier.wait()
-        # while len(self.sockets_ativos) < 4:
         while True:
             try:
                 cliente_socket, addr = self.servidor_socket.accept()
-                self.sockets_ativos.append({"socket": cliente_socket, "role": TipoNo.ACCEPTOR})
+
+                dados = cliente_socket.recv(BUFFER_SIZE)
+                if not dados:
+                    continue
+                mensagem = json.loads(dados.decode())
+                neighbor_id = mensagem.get('id')
+
+                for vizinho in self.vizinhos:
+                    if vizinho['id'] == neighbor_id:
+                        # Adiciona o socket e o papel do vizinho à lista de envio
+                        self.sockets_para_envio.append({
+                            "id": vizinho['id'],
+                            "socket": cliente_socket,
+                            "role": vizinho['role']
+                    })
+                
             except Exception as e:
-                print(f"Erro ao aceitar conexão: {e}")
+                print(f"\033[31mErro ao aceitar conexão: {e}\033[0m")
                 break
 
     def iniciar(self):
@@ -115,6 +162,7 @@ class NoP2P:
         threading.Thread(target=self.aceitar_conexoes_vizinhos).start()
         if self.id == 1:
             threading.Thread(target=self.conectar_com_clientes).start()
+        threading.Thread(target=self.receber_preparacao).start()
 
 # ---------- Área de teste ----------
 
