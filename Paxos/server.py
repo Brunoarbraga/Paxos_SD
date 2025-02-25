@@ -39,14 +39,21 @@ class NoP2P:
         self.promised_flag = False
         self.promised_value = None
         self.promises_recebidos = 0
+        self.promised_end_flag = False
+
+        self.break_supremo = False
 
         # Cria socket para escutar conexões
         self.servidor_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.servidor_socket.bind((self.host, self.porta_para_outros_nos))
+
+        # Inicia o servidor
+        try:
+            self.servidor_socket.bind((self.host, self.porta_para_outros_nos))
+        except OSError as e:
+            print(f"Erro ao vincular a porta {self.porta_para_outros_nos}: {e}")
         self.servidor_socket.listen() # até 4 conexões simultâneas
 
-
-    def preparacao(self, mensagem):
+    def mandar_preparacao(self, mensagem):
         """ Envia uma mensagem para todos os vizinhos conectados """
 
         for element in self.sockets_para_envio:
@@ -63,8 +70,10 @@ class NoP2P:
 
             except Exception as e:
                 print(f"\033[31mErro ao enviar preparação: {e}\033[0m")
+
+    def receber_resposta_preparacao(self, mensagem):
+        """ Aguarda as respostas dos promises que mandou """
         
-        # Aguarda as respostas dos promises que mandou
         while self.respostas_recebidas != self.preparacoes_enviadas:
             for element in self.sockets_para_envio:
                 try:
@@ -74,20 +83,48 @@ class NoP2P:
                         continue
 
                     tupla_de_resposta = json.loads(tupla_de_resposta.decode())
+                    dicionario = tupla_de_resposta[1]
 
+                    # se receber um promise, acrescenta os promises recebidos
                     if tupla_de_resposta[0] == "promise":
                         print(f"\033[32mNó {self.id} recebeu promise de preparação do nó: {element['id']}\033[0m")
                         self.promises_recebidos += 1
-
+                    # se receber um not promise, incrementa o TID pra tentar de novo
                     else:
-                        
-
+                        self.TID = dicionario['TID'] + 1
+                    
                     self.respostas_recebidas += 1
+                    if self.respostas_recebidas == self.preparacoes_enviadas:
+                        break
                 except Exception as e:
                     print(f"\033[31mErro ao receber resposta: {e}\033[0m")
+                
 
-        self.preparacoes_enviadas = 0
-        self.respostas_recebidas = 0
+    def mandar_accept(self, mensagem):
+        
+        tupla_de_accept = ("accept", mensagem)
+        for element in self.sockets_para_envio:
+            try:
+                element['socket'].send((json.dumps(tupla_de_accept)).encode())
+            except Exception as e:
+                print(f"\033[31mErro ao enviar accept: {e}\033[0m")
+
+    def preparacao(self, mensagem):
+        
+        while self.promised_end_flag == False:
+
+            self.promises_recebidos = 0
+            self.promised_end_flag = False
+            self.preparacoes_enviadas = 0
+            self.respostas_recebidas = 0
+
+            self.mandar_preparacao(mensagem)
+            self.receber_resposta_preparacao(mensagem)
+            if self.promises_recebidos >= self.consenso:
+                self.promised_end_flag = True
+        
+
+        self.mandar_accept(mensagem) #todo consertar esse accept
 
 
 
@@ -99,6 +136,24 @@ class NoP2P:
 
 
 
+
+    def receber_accept(self):
+
+        while True:
+            for element in self.sockets_ativos:
+                try:
+                    # Recebe a mensagem
+                    tupla_de_accept = element['socket'].recv(BUFFER_SIZE)
+                    if not tupla_de_accept:
+                        continue
+
+                    # Decodifica a mensagem
+                    tupla_de_accept = json.loads(tupla_de_accept.decode())
+                    print(f"\033[32mNó {self.id} recebeu accept de: {tupla_de_accept[1]['ID']}. Mandando para o LEARNER\033[0m")
+
+                except Exception as e:
+                    print(f"\033[31mErro ao receber accept: {e}\033[0m")
+                    continue
 
 
     def receber_preparacao(self):
@@ -128,8 +183,9 @@ class NoP2P:
                     
             # time.sleep(0.1)
     
-    # Devolve um "promise"
     def prometer_preparacao(self, element, mensagem):
+        """ Devolve um "promise" """
+        
         self.promised_flag = True
         self.TID = mensagem['TID'] # atualiza o TID com o TID da mensagem maior
         print(f"\033[32mNó {self.id} prometeu preparação: {mensagem}\033[0m")
@@ -141,8 +197,9 @@ class NoP2P:
         except Exception as e:
             print(f"\033[31mErro ao enviar promise: {e}\033[0m")
     
-    # Devolve um "not promise"
     def negar_preparacao(self, element, mensagem):
+        """ Devolve um "not promise" """
+
         print(f"\033[31mNó {self.id} negou preparação: {mensagem}\033[0m")
 
         mensagem_tupla = (("not promise", mensagem))
@@ -194,7 +251,7 @@ class NoP2P:
             conn.sendall(json.dumps({"status": "committed", "node_id": self.id, "timestamp": timestamp}).encode())
     
     def conectar_a_vizinhos(self):
-        """ Conecta-se a 4 vizinhos usando sockets clientes """
+        """ Conecta-se aos vizinhos usando sockets clientes """
         self.barrier.wait()
         
         for vizinho in self.vizinhos:
@@ -205,6 +262,8 @@ class NoP2P:
             if self.role == TipoNo.LEARNER and vizinho['role'] == TipoNo.LEARNER: 
                 continue
             
+            # time.sleep(2)
+
             while True:
                 try:               
                     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -251,9 +310,11 @@ class NoP2P:
         """ Inicia o nó: conecta-se aos vizinhos e aceita conexões """
         threading.Thread(target=self.conectar_a_vizinhos).start()
         threading.Thread(target=self.aceitar_conexoes_vizinhos).start()
-        if self.id == 1:
-            threading.Thread(target=self.conectar_com_clientes).start()
+        
+        threading.Thread(target=self.conectar_com_clientes).start()
         threading.Thread(target=self.receber_preparacao).start()
+        #threading.Thread(target=self.receber_accept).start()
+
 
 # ---------- Área de teste ----------
 
