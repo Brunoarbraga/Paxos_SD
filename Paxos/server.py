@@ -23,19 +23,28 @@ class NoP2P:
         self.host = host
         self.porta_para_outros_nos = porta_para_nos
         self.porta_para_clientes = porta_para_clientes
-        self.vizinhos = vizinhos # lista de 4 vizinhos (host, porta)
-        self.sockets_ativos = [] # lista de conexões ativas
+        self.vizinhos = vizinhos # Lista de 4 vizinhos (host, porta)
+        self.sockets_ativos = [] # Lista de conexões ativas
         self.sockets_para_envio = []
-        self.barrier = barrier # barrier para sincronização
+        self.barrier = barrier # Barrier para sincronização
         self.porta_cliente = porta_cliente
         self.preparacao_enviada = False
-        self.TID = None
-        self.valor = None 
+        self.TID = 1 # Valor de transação único que será utilizado para prometer ou não, incrementa caso não for prometido 
+        self.valor = None
+
+        self.consenso = 2 # Valor pra atingir um consenso, como existem 3 nós, o consenso é 2 
+        self.preparacoes_enviadas = 0
+        self.respostas_recebidas = 0
+
+        self.promised_flag = False
+        self.promised_value = None
+        self.promises_recebidos = 0
 
         # Cria socket para escutar conexões
         self.servidor_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.servidor_socket.bind((self.host, self.porta_para_outros_nos))
         self.servidor_socket.listen() # até 4 conexões simultâneas
+
 
     def preparacao(self, mensagem):
         """ Envia uma mensagem para todos os vizinhos conectados """
@@ -49,10 +58,48 @@ class NoP2P:
             # Envia a mensagem codificada
             try:
                 element['socket'].send(mensagem)
+                self.preparacoes_enviadas = self.preparacoes_enviadas + 1
                 print(f"Nó {self.id} enviando preparação: {mensagem}")
 
             except Exception as e:
                 print(f"\033[31mErro ao enviar preparação: {e}\033[0m")
+        
+        # Aguarda as respostas dos promises que mandou
+        while self.respostas_recebidas != self.preparacoes_enviadas:
+            for element in self.sockets_para_envio:
+                try:
+                    tupla_de_resposta = element['socket'].recv(BUFFER_SIZE)
+
+                    if not tupla_de_resposta:
+                        continue
+
+                    tupla_de_resposta = json.loads(tupla_de_resposta.decode())
+
+                    if tupla_de_resposta[0] == "promise":
+                        print(f"\033[32mNó {self.id} recebeu promise de preparação do nó: {element['id']}\033[0m")
+                        self.promises_recebidos += 1
+
+                    else:
+                        
+
+                    self.respostas_recebidas += 1
+                except Exception as e:
+                    print(f"\033[31mErro ao receber resposta: {e}\033[0m")
+
+        self.preparacoes_enviadas = 0
+        self.respostas_recebidas = 0
+
+
+
+
+
+
+
+
+
+
+
+
 
     def receber_preparacao(self):
         """ Recebe mensagens de preparação dos outros nós """
@@ -69,11 +116,41 @@ class NoP2P:
                     mensagem = json.loads(dados.decode())
                     print(f"\033[33mNó {self.id} recebeu preparação: {mensagem}\033[0m")
 
+                    # Se não tiver prometido nenhum valor ainda, promete esse
+                    if self.promised_flag == False or self.TID < mensagem['TID']:
+                        self.prometer_preparacao(element, mensagem)
+                    else:
+                        self.negar_preparacao(element, mensagem)
+
                 except Exception as e:
                     print(f"\033[31mErro ao receber preparação: {e}\033[0m")
                     continue
-                
+                    
             # time.sleep(0.1)
+    
+    # Devolve um "promise"
+    def prometer_preparacao(self, element, mensagem):
+        self.promised_flag = True
+        self.TID = mensagem['TID'] # atualiza o TID com o TID da mensagem maior
+        print(f"\033[32mNó {self.id} prometeu preparação: {mensagem}\033[0m")
+        
+        mensagem_tupla = (("promise", mensagem))
+        # Manda de volta a mensagem com um promise 
+        try:
+            element['socket'].send((json.dumps(mensagem_tupla)).encode())
+        except Exception as e:
+            print(f"\033[31mErro ao enviar promise: {e}\033[0m")
+    
+    # Devolve um "not promise"
+    def negar_preparacao(self, element, mensagem):
+        print(f"\033[31mNó {self.id} negou preparação: {mensagem}\033[0m")
+
+        mensagem_tupla = (("not promise", mensagem))
+        # Manda de volta a mensagem com um not promise 
+        try:
+            element['socket'].send((json.dumps(mensagem_tupla)).encode())
+        except Exception as e:
+            print(f"\033[31mErro ao enviar not promise: {e}\033[0m")
 
     def conectar_com_clientes(self):
         """ Conecta-se a um cliente externo """
@@ -88,19 +165,33 @@ class NoP2P:
         # Loop que recebe requisições do cliente
         while True:
 
-            # Recebendo requisição
+            # Recebe requisiçãosockets_ativos
             dados = conn.recv(BUFFER_SIZE)
+
             if not dados:
                 break    
+
+            # Converte o json de volta em dicionário
             mensagem = json.loads(dados.decode())
+
+            # Adicion o TID desse proposer
+            mensagem["TID"] = self.TID
+            mensagem["ID"] = self.id
+
             timestamp = mensagem.get('timestamp')
             print(f"\033[33mNó {self.id} recebeu request do cliente com timestamp {timestamp}\033[0m")
 
+            # Converte de novo para json para mandar na preparação
+            json_string = json.dumps(mensagem)
+            json_string = json_string.encode()
+
+            self.preparacao(json_string)
+
             # Mandando preparação para os accepters
-            self.preparacao(dados)
+            # self.preparacao(dados)
             
-            #Mudar isso aqui depois, isso é pra falar pro cliente que deu certo
-            conn.sendall(json.dumps({"status": "commited"}).encode())  
+            # Mensagem de commit
+            conn.sendall(json.dumps({"status": "committed", "node_id": self.id, "timestamp": timestamp}).encode())
     
     def conectar_a_vizinhos(self):
         """ Conecta-se a 4 vizinhos usando sockets clientes """
@@ -117,7 +208,7 @@ class NoP2P:
             while True:
                 try:               
                     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    sock.settimeout(5) # timeout para evitar bloqueio infinito
+                    sock.settimeout(10) # timeout para evitar bloqueio infinito
                     sock.connect(vizinho['ip_porta'])
 
                     sock.send(json.dumps({"id": self.id}).encode())
