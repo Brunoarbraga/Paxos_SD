@@ -3,6 +3,11 @@ import socket
 import threading
 import time
 import json
+from pymongo.mongo_client import MongoClient
+from pymongo.server_api import ServerApi
+
+uri = "mongodb+srv://brunoab:Yukahagany1!@cluster0.r8nnr.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+
 from constants import *
 
 # Define o tipo do nó
@@ -14,7 +19,7 @@ class TipoNo (Enum):
 
 # Nó com conexão par a par
 class NoP2P:
-    def __init__(self, id, role, host, porta_para_nos, porta_para_clientes, vizinhos, barrier, porta_cliente):
+    def __init__(self, id, role, host, porta_para_nos, porta_para_clientes, vizinhos, barrier):
         
         """
         host: endereço IP do nó atual.
@@ -36,11 +41,12 @@ class NoP2P:
         self.sockets_acceptors_servers = []
         self.sockets_learners_servers = [] 
 
-        self.conn = None #conexão com o cliente (facilita o processo do learner respodê-lo)
+        # listas para o processo de consenso do learner
+        self.commits_recebidos = {}
+        self.commits_processados = set()
 
         # Atributos de transação
         self.barrier = barrier # Barrier para sincronização
-        self.porta_cliente = porta_cliente
         self.preparacao_enviada = False
         self.TID = 1 # Valor de transação único que será utilizado para prometer ou não, incrementa caso não for prometido 
         self.valor = None
@@ -158,6 +164,8 @@ class NoP2P:
         self.cliente_socket.listen()
 
         conn, addr = self.cliente_socket.accept()
+        print(f"Conexão estabelecida com o cliente: {addr}")  # <-- Adiciona debug
+        
         print(f"Nó {self.id} conectado com o cliente {addr}")
 
         # Loop que recebe requisições do cliente
@@ -194,24 +202,39 @@ class NoP2P:
         while self.promised_end_flag == False:
 
             self.promises_recebidos = 0
-            self.promised_end_flag = False
             self.preparacoes_enviadas = 0
             self.respostas_recebidas = 0
 
-            #atualiza o TID da mensagem
-            mensagem_decodificada = mensagem.decode()
-            mensagem_json = json.loads(mensagem_decodificada)
+            # Tenta decodificar a mensagem
+            try:
+                mensagem_decodificada = mensagem.decode()
+                mensagem_json = json.loads(mensagem_decodificada)
+            except Exception as e:
+                print(f"\033[31mErro ao decodificar mensagem: {e}\033[0m")
+                return
+
+            # Atualiza o TID da mensagem
             mensagem_json['TID'] = self.TID
 
             json_string = json.dumps(mensagem_json)
             json_string = json_string.encode()
-            self.mandar_preparacao(json_string)
-            self.receber_resposta_preparacao(json_string)
-            if self.promises_recebidos >= CONSENSO:
+            
+            try:
+                self.mandar_preparacao(json.dumps(mensagem_json).encode())  # Converte para JSON e codifica
+                self.receber_resposta_preparacao(json.dumps(mensagem_json).encode())  
+            except Exception as e:
+                print(f"\033[31mErro ao mandar ou receber preparação: {e}\033[0m")
+
+            if self.promises_recebidos >= CONSENSO_ACCEPTERS:
                 print(f"\033[32mNó {self.id} chegou a um consenso. Mandando accepts\033[0m")
                 self.promised_end_flag = True
         
-        self.mandar_accept(mensagem) #todo consertar esse accept
+        self.promised_end_flag = False
+        # Garante o formato correto da mensagem antes de enviar
+        if isinstance(mensagem, bytes):
+            self.mandar_accept(json_string)
+        else:
+            print(f"\033[31mErro: formato inválido de mensagem para mandar_accept: {mensagem}\033[0m")
 
     # Envia uma mensagem de preparação para todos os vizinhos conectados
     def mandar_preparacao(self, mensagem):
@@ -308,7 +331,7 @@ class NoP2P:
             print(f"\033[31mErro ao enviar 'not promise': {e}\033[0m")
 
 
-    # ---------- PROCESSAMENTO | LADO DO ACCEPTOR ----------
+    # ---------- ACEITAÇÃO | LADO DO ACCEPTOR ----------
 
     # Manda um "accept"
     def mandar_accept(self, mensagem):
@@ -336,11 +359,7 @@ class NoP2P:
         print(f"\033[32mNó {self.id} recebeu 'accept' de: {mensagem['ID']}. Mandando para o learner\033[0m")
 
         mensagem['tipo'] = "commit"
-
-        # Adiciona informações para o learner mandar confirmação pro client
-        mensagem['client_host'] = self.host
-        mensagem['client_port'] = self.porta_para_clientes
-
+ 
         json_string = json.dumps(mensagem)
         json_string = json_string.encode()
 
@@ -348,20 +367,78 @@ class NoP2P:
             element['socket'].send(json_string)
 
 
-    # ---------- PROCESSAMENTO | LADO DO LEARNER ----------
+    # ---------- ACEITAÇÃO | LADO DO LEARNER ----------
     
+    # Verifica se atingiu um consenso das mensagens dos accptors
+    def consenso_commit(self, mensagem):
+    
+        tid = mensagem["TID"]
+        timestamp = mensagem["timestamp"]
+
+        if tid not in self.commits_recebidos:
+            self.commits_recebidos[tid] = {"timestamp": timestamp, "contagem": 0}
+
+        # Incrementa contagem de commits recebidos para esse TID
+        self.commits_recebidos[tid]["contagem"] += 1
+        print(f"Learner {self.id} recebeu {self.commits_recebidos[tid]['contagem']} commits para TID {tid}")
+
+        # Verifica se atingiu a maioria para tomar decisão
+        if self.commits_recebidos[tid]["contagem"] >= CONSENSO_LEARNERS and tid not in self.commits_processados:
+            print(f"\033[32mLearner {self.id} atingiu consenso para TID {tid} com timestamp {timestamp}\033[0m")
+            self.commits_processados.add(tid)
+            return True
+        
+        print(f"\033[31mLearner {self.id} ainda NÃO atingiu consenso para TID {tid}\033[0m")
+        return False
+
     # Commita e avisa o cliente
     def commitar(self, mensagem):
         self.valor_aprendido = mensagem['valor'] # aprende o valor
         print(f"\033[32mLearner {self.id} commitando valor {mensagem['valor']} da transação do nó {mensagem['ID']}\033[0m")
-                
-        # resposta_cliente = {
-        #     "tipo": "resposta",
-        #     "status": "sucesso",
-        #     "mensagem": "Transação confirmada pelo Learner"
-        # }
+        
+        # Conecta ao servidor Mongo
+        client = MongoClient(uri, server_api=ServerApi('1'))
+        # Escolhe o banco de dados
+        db = client["client" + mensagem['client_id']]
+        # Escolne uma coleção (só tem uma)
+        colecao = db["transactions"]
+        # Insere na coleção
+        colecao.insert_one(mensagem)
 
-        # mensagem['conn'].send(json.dumps(resposta_cliente).encode())
+        # Verifica se a mensagem tem infos do cliente
+        if "client_host" not in mensagem or "client_port" not in mensagem:
+            print(f"\033[31mErro: client_host ou client_port ausente na mensagem {mensagem}\033[0m")
+            return
+    
+        # Conecta ao cliente
+        try:
+            sock_cliente = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+            print(f"Tentando conectar ao cliente {mensagem['client_host']} na porta {mensagem['client_port']}...")
+
+            sock_cliente.connect((mensagem['client_host'], mensagem["client_port"]))
+            print("Conexão com o cliente estabelecida!")
+
+            # Cria a mensagem de aviso
+            resposta_cliente = {
+                "tipo": "resposta",
+                "status": "sucesso",
+                "mensagem": "Transação confirmada pelo Learner",
+                "valor": mensagem['valor']
+            }
+            
+            # Envia o aviso para o cliente
+            print("Enviando resposta ao cliente...")
+            sock_cliente.send(json.dumps(resposta_cliente).encode())
+
+            print("\033[32mResposta enviada com sucesso!\033[0m")
+
+            # Encerra a conexão
+            sock_cliente.close()
+
+        except Exception as e:
+            print(f"\033[31mEro ao enviar aviso para o cliente: {e}\033[0m")
+            raise
 
     # Recebe uma mensagem de outro nó
     def receber_mensagens(self):
@@ -386,15 +463,29 @@ class NoP2P:
                         elif mensagem['tipo'] == "accept":
                             self.processar_accept(mensagem)
                         elif mensagem['tipo'] == "commit":
-                            mensagem["conn"] = self.conn
-                            self.commitar(mensagem)
+                            if mensagem["TID"] not in self.commits_recebidos:
+                                self.commits_recebidos[mensagem["TID"]] = {"contagem": 0}
+
+                            # if mensagem["TID"] != self.TID:
+                            #     print(f"\033[31mLearner {self.id} ignorou commit de TID {mensagem['TID']} (esperado {self.TID})\033[0m")
+                            #     continue  # ignora commits antigos
+
+                            # Print detalhado para depuração
+                            print(f"\033[33mLearner {self.id} recebeu commit para TID {mensagem['TID']} (esperado {self.TID})\033[0m")
+
+                            # Verifica se atingiu consenso
+                            atingiu_consenso = self.consenso_commit(mensagem)
+                            print(f"\033[36mLearner {self.id} consenso para TID {mensagem['TID']}: {atingiu_consenso}\033[0m")
+
+                            if atingiu_consenso:
+                                self.commitar(mensagem)
 
                     except socket.timeout:
                         print(f"\033[33mAviso: Timeout ao receber mensagem no nó {self.id}.\033[0m")
                     except json.JSONDecodeError:
                         print(f"\033[31mErro: Dados recebidos não são JSON válido.\033[0m")
                     except Exception as e:
-                        print(f"\033[31mErro ao receber mensagem: {e}\033[0m")
+                        print(f"\033[31mErro ao receber mensagem: {e}\033[0m\n{mensagem}")
 
 
 # ---------- ÁREA DE TESTE ----------
@@ -409,11 +500,11 @@ nos = [{"id": 1, "role" : TipoNo.ACCEPTOR , "ip_porta" : ("127.0.0.1", 5000)},
        {"id": 5, "role" : TipoNo.LEARNER, "ip_porta": ("127.0.0.1", 5008)}]
 
 # Inicializa os nós
-n1 = NoP2P(1, TipoNo.ACCEPTOR, "127.0.0.1", 5000, 5001, nos, barrier, 5010)
-n2 = NoP2P(2, TipoNo.ACCEPTOR, "127.0.0.1", 5002, 5003, nos, barrier, 5011)
-n3 = NoP2P(3, TipoNo.ACCEPTOR, "127.0.0.1", 5004, 5005, nos, barrier, 5012)
-n4 = NoP2P(4, TipoNo.LEARNER, "127.0.0.1", 5006, 5007, nos, barrier, 5013)
-n5 = NoP2P(5, TipoNo.LEARNER, "127.0.0.1", 5008, 5009, nos, barrier, 5014)
+n1 = NoP2P(1, TipoNo.ACCEPTOR, "127.0.0.1", 5000, 5001, nos, barrier)
+n2 = NoP2P(2, TipoNo.ACCEPTOR, "127.0.0.1", 5002, 5003, nos, barrier)
+n3 = NoP2P(3, TipoNo.ACCEPTOR, "127.0.0.1", 5004, 5005, nos, barrier)
+n4 = NoP2P(4, TipoNo.LEARNER, "127.0.0.1", 5006, 5007, nos, barrier)
+n5 = NoP2P(5, TipoNo.LEARNER, "127.0.0.1", 5008, 5009, nos, barrier)
 
 # Inicia os nós
 n1.iniciar()
