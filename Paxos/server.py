@@ -7,211 +7,152 @@ from constants import *
 
 # Define o tipo do nó
 class TipoNo (Enum):
+    # Todo nó é naturalmente um PROPOSER
     ACCEPTOR = 1
     LEARNER = 2
     CLIENTE = 3
 
+# Nó com conexão par a par
 class NoP2P:
     def __init__(self, id, role, host, porta_para_nos, porta_para_clientes, vizinhos, barrier, porta_cliente):
+        
         """
         host: endereço IP do nó atual.
         porta: porta do nó atual.
         vizinhos: lista (host, porta) dos 4 nós vizinhos.
         """
+        
+        # Atributos básicos do nó
         self.id = id
         self.role = role # TipoNo
         self.host = host
         self.porta_para_outros_nos = porta_para_nos
         self.porta_para_clientes = porta_para_clientes
         self.vizinhos = vizinhos # Lista de 4 vizinhos (host, porta)
-        self.sockets_ativos = [] # Lista de conexões ativas
-        self.sockets_para_envio = []
+
+        # Acceptors e learners
+        self.sockets_acceptors_clients = [] 
+        self.sockets_learners_clients = [] 
+        self.sockets_acceptors_servers = []
+        self.sockets_learners_servers = [] 
+
+        self.conn = None #conexão com o cliente (facilita o processo do learner respodê-lo)
+
+        # Atributos de transação
         self.barrier = barrier # Barrier para sincronização
         self.porta_cliente = porta_cliente
         self.preparacao_enviada = False
         self.TID = 1 # Valor de transação único que será utilizado para prometer ou não, incrementa caso não for prometido 
         self.valor = None
 
-        self.consenso = 2 # Valor pra atingir um consenso, como existem 3 nós, o consenso é 2 
+        # Preparação
         self.preparacoes_enviadas = 0
         self.respostas_recebidas = 0
 
+        # Promessas
         self.promised_flag = False
         self.promised_value = None
         self.promises_recebidos = 0
         self.promised_end_flag = False
 
-        self.break_supremo = False
+        # Threading
+        self.mutex = threading.Event()
 
-        # Cria socket para escutar conexões
+        # Socket para escutar conexões
         self.servidor_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
-        # Inicia o servidor
+        # Iniciação do servidor
         try:
             self.servidor_socket.bind((self.host, self.porta_para_outros_nos))
         except OSError as e:
             print(f"Erro ao vincular a porta {self.porta_para_outros_nos}: {e}")
         self.servidor_socket.listen() # até 4 conexões simultâneas
 
-    def mandar_preparacao(self, mensagem):
-        """ Envia uma mensagem para todos os vizinhos conectados """
 
-        for element in self.sockets_para_envio:
+    # ---------- INICIAÇÃO E CONEXÃO DE NÓS ----------
 
-            # Impede que a mensagem seja enviada para um learner
-            if element['role'] == TipoNo.LEARNER:
-                continue
+    # Inicia um nó
+    def iniciar(self):
+        # Conecta aos vizinhos
+        threading.Thread(target=self.conectar_a_vizinhos).start()
+        threading.Thread(target=self.aceitar_conexoes_vizinhos).start()
+        # Conecta ao cliente
+        threading.Thread(target=self.conectar_com_clientes).start()
+        threading.Thread(target=self.receber_mensagens).start()
 
-            # Envia a mensagem codificada
-            try:
-                element['socket'].send(mensagem)
-                self.preparacoes_enviadas = self.preparacoes_enviadas + 1
-                print(f"Nó {self.id} enviando preparação: {mensagem}")
-
-            except Exception as e:
-                print(f"\033[31mErro ao enviar preparação: {e}\033[0m")
-
-    def receber_resposta_preparacao(self, mensagem):
-        """ Aguarda as respostas dos promises que mandou """
-        
-        while self.respostas_recebidas != self.preparacoes_enviadas:
-            for element in self.sockets_para_envio:
-                try:
-                    tupla_de_resposta = element['socket'].recv(BUFFER_SIZE)
-
-                    if not tupla_de_resposta:
-                        continue
-
-                    tupla_de_resposta = json.loads(tupla_de_resposta.decode())
-                    dicionario = tupla_de_resposta[1]
-
-                    # se receber um promise, acrescenta os promises recebidos
-                    if tupla_de_resposta[0] == "promise":
-                        print(f"\033[32mNó {self.id} recebeu promise de preparação do nó: {element['id']}\033[0m")
-                        self.promises_recebidos += 1
-                    # se receber um not promise, incrementa o TID pra tentar de novo
-                    else:
-                        self.TID = dicionario['TID'] + 1
-                    
-                    self.respostas_recebidas += 1
-                    if self.respostas_recebidas == self.preparacoes_enviadas:
-                        break
-                except Exception as e:
-                    print(f"\033[31mErro ao receber resposta: {e}\033[0m")
-                
-
-    def mandar_accept(self, mensagem):
-        
-        tupla_de_accept = ("accept", mensagem)
-        for element in self.sockets_para_envio:
-            try:
-                element['socket'].send((json.dumps(tupla_de_accept)).encode())
-            except Exception as e:
-                print(f"\033[31mErro ao enviar accept: {e}\033[0m")
-
-    def preparacao(self, mensagem):
-        
-        while self.promised_end_flag == False:
-
-            self.promises_recebidos = 0
-            self.promised_end_flag = False
-            self.preparacoes_enviadas = 0
-            self.respostas_recebidas = 0
-
-            self.mandar_preparacao(mensagem)
-            self.receber_resposta_preparacao(mensagem)
-            if self.promises_recebidos >= self.consenso:
-                self.promised_end_flag = True
-        
-
-        self.mandar_accept(mensagem) #todo consertar esse accept
-
-
-
-
-
-
-
-
-
-
-
-
-    def receber_accept(self):
-
-        while True:
-            for element in self.sockets_ativos:
-                try:
-                    # Recebe a mensagem
-                    tupla_de_accept = element['socket'].recv(BUFFER_SIZE)
-                    if not tupla_de_accept:
-                        continue
-
-                    # Decodifica a mensagem
-                    tupla_de_accept = json.loads(tupla_de_accept.decode())
-                    print(f"\033[32mNó {self.id} recebeu accept de: {tupla_de_accept[1]['ID']}. Mandando para o LEARNER\033[0m")
-
-                except Exception as e:
-                    print(f"\033[31mErro ao receber accept: {e}\033[0m")
-                    continue
-
-
-    def receber_preparacao(self):
-        """ Recebe mensagens de preparação dos outros nós """
-        
-        while True:
-            for element in self.sockets_ativos:
-                try:
-                    # Recebe a mensagem
-                    dados = element['socket'].recv(BUFFER_SIZE)
-                    if not dados:
-                        continue
-
-                    # Decodifica a mensagem
-                    mensagem = json.loads(dados.decode())
-                    print(f"\033[33mNó {self.id} recebeu preparação: {mensagem}\033[0m")
-
-                    # Se não tiver prometido nenhum valor ainda, promete esse
-                    if self.promised_flag == False or self.TID < mensagem['TID']:
-                        self.prometer_preparacao(element, mensagem)
-                    else:
-                        self.negar_preparacao(element, mensagem)
-
-                except Exception as e:
-                    print(f"\033[31mErro ao receber preparação: {e}\033[0m")
-                    continue
-                    
-            # time.sleep(0.1)
-    
-    def prometer_preparacao(self, element, mensagem):
-        """ Devolve um "promise" """
-        
-        self.promised_flag = True
-        self.TID = mensagem['TID'] # atualiza o TID com o TID da mensagem maior
-        print(f"\033[32mNó {self.id} prometeu preparação: {mensagem}\033[0m")
-        
-        mensagem_tupla = (("promise", mensagem))
-        # Manda de volta a mensagem com um promise 
-        try:
-            element['socket'].send((json.dumps(mensagem_tupla)).encode())
-        except Exception as e:
-            print(f"\033[31mErro ao enviar promise: {e}\033[0m")
-    
-    def negar_preparacao(self, element, mensagem):
-        """ Devolve um "not promise" """
-
-        print(f"\033[31mNó {self.id} negou preparação: {mensagem}\033[0m")
-
-        mensagem_tupla = (("not promise", mensagem))
-        # Manda de volta a mensagem com um not promise 
-        try:
-            element['socket'].send((json.dumps(mensagem_tupla)).encode())
-        except Exception as e:
-            print(f"\033[31mErro ao enviar not promise: {e}\033[0m")
-
-    def conectar_com_clientes(self):
-        """ Conecta-se a um cliente externo """
+    # Conecta um nó a um vizinho usando sockets clientes
+    def conectar_a_vizinhos(self):
         self.barrier.wait()
+        
+        for vizinho in self.vizinhos:
+            # Impede que um nó se conecte a ele mesmo
+            if self.id == vizinho['id']:
+                continue
+            # Impede que dois learnes se conectem
+            if self.role == TipoNo.LEARNER and vizinho['role'] == TipoNo.LEARNER: 
+                continue
+            
+            while True:
+                try:               
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(10) # timeout para evitar bloqueio infinito
+                    sock.connect(vizinho['ip_porta'])
+
+                    sock.send(json.dumps({"id": self.id}).encode())
+
+                    if vizinho['role'] == TipoNo.ACCEPTOR:
+                        self.sockets_acceptors_clients.append({"id" : vizinho['id'], "socket" : sock, "role": vizinho['role'], "recebeu_prep" : False})
+                    else:
+                        self.sockets_learners_clients.append({"id" : vizinho['id'], "socket" : sock, "role": vizinho['role'], "recebeu_prep" : False})
+                     
+                    print(f"Nó {self.id} conectado ao vizinho {vizinho['id']} - {vizinho['role']}")
+                    
+                    break # se a conexão for bem sucedida, sai do loop
+                
+                except Exception as e:
+                    print(f"\033[31mErro ao conectar com {vizinho}: {e}. Tentando novamente em 2s...\033[0m")
+                    time.sleep(2)
+
+    # Escuta e aceita conexões de nós vizinhos
+    def aceitar_conexoes_vizinhos(self):
+        self.barrier.wait()
+        
+        while True:
+            try:
+                cliente_socket, addr = self.servidor_socket.accept()
+                dados = cliente_socket.recv(BUFFER_SIZE)
+
+                if not dados:
+                    continue
+
+                mensagem = json.loads(dados.decode())
+                neighbor_id = mensagem.get('id') 
+
+                for vizinho in self.vizinhos:
+                    if vizinho['id'] == neighbor_id:
+                        if vizinho['role'] == TipoNo.ACCEPTOR:
+                            # Adiciona o socket e o papel do vizinho à lista de envio
+                            self.sockets_acceptors_servers.append({
+                                "id": vizinho['id'],
+                                "socket": cliente_socket,
+                                "role": vizinho['role']
+                            })
+                        else:
+                            # Adiciona o socket e o papel do vizinho à lista de envio
+                            self.sockets_learners_servers.append({
+                                "id": vizinho['id'],
+                                "socket": cliente_socket,
+                                "role": vizinho['role']
+                            })
+            
+            except Exception as e:
+                print(f"\033[31mErro ao aceitar conexão: {e}\033[0m")
+                break
+
+    # Conecta um nó a um cliente externo
+    def conectar_com_clientes(self):
+        self.barrier.wait()
+        
         self.cliente_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.cliente_socket.bind((self.host, self.porta_para_clientes))
         self.cliente_socket.listen()
@@ -222,7 +163,7 @@ class NoP2P:
         # Loop que recebe requisições do cliente
         while True:
 
-            # Recebe requisiçãosockets_ativos
+            # Recebe requisição de sockets_ativos
             dados = conn.recv(BUFFER_SIZE)
 
             if not dados:
@@ -231,7 +172,7 @@ class NoP2P:
             # Converte o json de volta em dicionário
             mensagem = json.loads(dados.decode())
 
-            # Adicion o TID desse proposer
+            # Adiciona o TID desse proposer
             mensagem["TID"] = self.TID
             mensagem["ID"] = self.id
 
@@ -243,80 +184,220 @@ class NoP2P:
             json_string = json_string.encode()
 
             self.preparacao(json_string)
-
-            # Mandando preparação para os accepters
-            # self.preparacao(dados)
-            
-            # Mensagem de commit
-            conn.sendall(json.dumps({"status": "committed", "node_id": self.id, "timestamp": timestamp}).encode())
     
-    def conectar_a_vizinhos(self):
-        """ Conecta-se aos vizinhos usando sockets clientes """
-        self.barrier.wait()
+
+    # ---------- PREPARAÇÃO | LADO DO PROPOSER ----------
+
+    # Prepara
+    def preparacao(self, mensagem):
         
-        for vizinho in self.vizinhos:
-            # Impede que um nó se conecte com ele mesmo
-            if self.id == vizinho['id']:
-                continue
-            # Impede que dois learnes se conectem
-            if self.role == TipoNo.LEARNER and vizinho['role'] == TipoNo.LEARNER: 
-                continue
-            
-            # time.sleep(2)
+        while self.promised_end_flag == False:
 
-            while True:
-                try:               
-                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    sock.settimeout(10) # timeout para evitar bloqueio infinito
-                    sock.connect(vizinho['ip_porta'])
+            self.promises_recebidos = 0
+            self.promised_end_flag = False
+            self.preparacoes_enviadas = 0
+            self.respostas_recebidas = 0
 
-                    sock.send(json.dumps({"id": self.id}).encode())
+            #atualiza o TID da mensagem
+            mensagem_decodificada = mensagem.decode()
+            mensagem_json = json.loads(mensagem_decodificada)
+            mensagem_json['TID'] = self.TID
 
-                    self.sockets_ativos.append({"id" : vizinho['id'], "socket" : sock, "role": vizinho['role'], "recebeu_prep" : False})
-                    print(f"Nó {self.id} conectado ao vizinho {vizinho['id']} - {vizinho['role']}")
-                    break # se a conexão for bem sucedida, sai do loop
+            json_string = json.dumps(mensagem_json)
+            json_string = json_string.encode()
+            self.mandar_preparacao(json_string)
+            self.receber_resposta_preparacao(json_string)
+            if self.promises_recebidos >= CONSENSO:
+                print(f"\033[32mNó {self.id} chegou a um consenso. Mandando accepts\033[0m")
+                self.promised_end_flag = True
+        
+        self.mandar_accept(mensagem) #todo consertar esse accept
+
+    # Envia uma mensagem de preparação para todos os vizinhos conectados
+    def mandar_preparacao(self, mensagem):
+
+        for element in self.sockets_acceptors_servers:
+            # Envia a mensagem codificada
+            try:
+                # Muda o tipo da mensagem
+                mensagem_decodificada = mensagem.decode()
+                mensagem_json = json.loads(mensagem_decodificada)
+                mensagem_json['tipo'] = "preparacao"
+
+                print(f"Nó {self.id} enviando preparação: {mensagem_json}")
+
+                json_string = json.dumps(mensagem_json)
+                json_string = json_string.encode()
+
+                element['socket'].send(json_string)
+                self.preparacoes_enviadas = self.preparacoes_enviadas + 1
+
+            except Exception as e:
+                print(f"\033[31mErro ao enviar preparação: {e}\033[0m")
+
+    # Aguarda as respostas das preparações que mandou
+    def receber_resposta_preparacao(self, mensagem):
+        
+        while self.respostas_recebidas != self.preparacoes_enviadas:
+            for element in self.sockets_acceptors_servers:
+                try:
+                    tupla_de_resposta = element['socket'].recv(BUFFER_SIZE)
+
+                    if not tupla_de_resposta:
+                        continue
+
+                    tupla_de_resposta = json.loads(tupla_de_resposta.decode())
+                    dicionario = tupla_de_resposta[1]
+
+                    # Se receber um "promise", incrementa os promises recebidos
+                    if tupla_de_resposta[0] == "promise":
+                        print(f"\033[32mNó {self.id} recebeu 'promise' de preparação do nó: {element['id']}\033[0m")
+                        self.promises_recebidos += 1
+                    # Se receber um "not promise", incrementa o TID pra tentar de novo
+                    else:
+                        self.TID = dicionario['TID'] + 1
+                    
+                    self.respostas_recebidas += 1
+
+                    if self.respostas_recebidas == self.preparacoes_enviadas:
+                        break
                 
                 except Exception as e:
-                    print(f"\033[31mErro ao conectar com {vizinho}: {e}. Tentando novamente em 2s...\033[0m")
-                    time.sleep(2)
+                    print(f"\033[31mErro ao receber resposta de preparação: {e}\033[0m")
 
-    def aceitar_conexoes_vizinhos(self):
-        """ Escuta conexões dos outros nós """
-        self.barrier.wait()
-        while True:
-            try:
-                cliente_socket, addr = self.servidor_socket.accept()
 
-                dados = cliente_socket.recv(BUFFER_SIZE)
-                if not dados:
-                    continue
-                mensagem = json.loads(dados.decode())
-                neighbor_id = mensagem.get('id')
+    # ---------- PREPARAÇÃO | LADO DO ACCEPTOR ----------
 
-                for vizinho in self.vizinhos:
-                    if vizinho['id'] == neighbor_id:
-                        # Adiciona o socket e o papel do vizinho à lista de envio
-                        self.sockets_para_envio.append({
-                            "id": vizinho['id'],
-                            "socket": cliente_socket,
-                            "role": vizinho['role']
-                    })
-                
-            except Exception as e:
-                print(f"\033[31mErro ao aceitar conexão: {e}\033[0m")
-                break
+    # Recebe uma mensagem de preparação de outro nó
+    def processar_preparacao(self, element, mensagem):
 
-    def iniciar(self):
-        """ Inicia o nó: conecta-se aos vizinhos e aceita conexões """
-        threading.Thread(target=self.conectar_a_vizinhos).start()
-        threading.Thread(target=self.aceitar_conexoes_vizinhos).start()
+        print(f"\033[33mNó {self.id} recebeu preparação: {mensagem}\033[0m")
+
+        # Se não tiver prometido nenhum valor ainda, promete esse
+        if self.promised_flag == False or self.TID < mensagem['TID']:
+            self.prometer_preparacao(element, mensagem)
+        else:
+            self.negar_preparacao(element, mensagem)
+
+    # Devolve um "promise" como resposta à mensagem de preparação de outro nó
+    def prometer_preparacao(self, element, mensagem):
         
-        threading.Thread(target=self.conectar_com_clientes).start()
-        threading.Thread(target=self.receber_preparacao).start()
-        #threading.Thread(target=self.receber_accept).start()
+        self.promised_flag = True
+        self.TID = mensagem['TID'] # atualiza o TID com o TID da mensagem maior
+        print(f"\033[32mNó {self.id} prometeu preparação: {mensagem}\033[0m")
+        
+        mensagem_tupla = ["promise", mensagem] #aqui
+
+        # Manda de volta a mensagem com um "promise"
+        try:
+            element['socket'].send((json.dumps(mensagem_tupla)).encode()) #aqui
+        except Exception as e:
+            print(f"\033[31mErro ao enviar 'promise': {e}\033[0m")
+    
+    # Devolve um "not promise" como resposta à mensagem de preparação de outro nó
+    def negar_preparacao(self, element, mensagem):
+
+        print(f"\033[31mNó {self.id} negou preparação: {mensagem}\033[0m")
+
+        mensagem_tupla = (("not promise", mensagem))
+
+        # Manda de volta a mensagem com um "not promise" 
+        try:
+            element['socket'].send((json.dumps(mensagem_tupla)).encode())
+        except Exception as e:
+            print(f"\033[31mErro ao enviar 'not promise': {e}\033[0m")
 
 
-# ---------- Área de teste ----------
+    # ---------- PROCESSAMENTO | LADO DO ACCEPTOR ----------
+
+    # Manda um "accept"
+    def mandar_accept(self, mensagem):
+        
+        self.mutex.set()
+
+        # Muda o tipo da mensagem 
+        mensagem_decodificada = mensagem.decode()
+        mensagem_json = json.loads(mensagem_decodificada)
+        mensagem_json['tipo'] = "accept"
+        
+        json_string = json.dumps(mensagem_json)
+        json_string = json_string.encode()
+        
+        for element in self.sockets_acceptors_servers:
+            try:
+                element['socket'].send(json_string)
+                print(f"\033[32mNó {self.id} enviou 'accept' para {element['id']}\033[0m")
+            except Exception as e:
+                print(f"\033[31mErro ao enviar 'accept': {e}\033[0m")
+    
+    # Recebe um "accept"
+    def processar_accept(self, mensagem):
+
+        print(f"\033[32mNó {self.id} recebeu 'accept' de: {mensagem['ID']}. Mandando para o learner\033[0m")
+
+        mensagem['tipo'] = "commit"
+
+        # Adiciona informações para o learner mandar confirmação pro client
+        mensagem['client_host'] = self.host
+        mensagem['client_port'] = self.porta_para_clientes
+
+        json_string = json.dumps(mensagem)
+        json_string = json_string.encode()
+
+        for element in self.sockets_learners_servers:
+            element['socket'].send(json_string)
+
+
+    # ---------- PROCESSAMENTO | LADO DO LEARNER ----------
+    
+    # Commita e avisa o cliente
+    def commitar(self, mensagem):
+        self.valor_aprendido = mensagem['valor'] # aprende o valor
+        print(f"\033[32mLearner {self.id} commitando valor {mensagem['valor']} da transação do nó {mensagem['ID']}\033[0m")
+                
+        # resposta_cliente = {
+        #     "tipo": "resposta",
+        #     "status": "sucesso",
+        #     "mensagem": "Transação confirmada pelo Learner"
+        # }
+
+        # mensagem['conn'].send(json.dumps(resposta_cliente).encode())
+
+    # Recebe uma mensagem de outro nó
+    def receber_mensagens(self):
+        while True:
+            if not self.sockets_acceptors_clients:
+                time.sleep(1) # aguarda um pouco antes de tentar novamente
+                continue
+            
+            for element in self.sockets_acceptors_clients:    
+                    element['socket'].settimeout(1)
+
+                    try:
+                        dados = element['socket'].recv(BUFFER_SIZE)
+                        
+                        if not dados:
+                            continue
+
+                        mensagem = json.loads(dados.decode())
+
+                        if mensagem['tipo'] == "preparacao":
+                            self.processar_preparacao(element, mensagem)
+                        elif mensagem['tipo'] == "accept":
+                            self.processar_accept(mensagem)
+                        elif mensagem['tipo'] == "commit":
+                            mensagem["conn"] = self.conn
+                            self.commitar(mensagem)
+
+                    except socket.timeout:
+                        print(f"\033[33mAviso: Timeout ao receber mensagem no nó {self.id}.\033[0m")
+                    except json.JSONDecodeError:
+                        print(f"\033[31mErro: Dados recebidos não são JSON válido.\033[0m")
+                    except Exception as e:
+                        print(f"\033[31mErro ao receber mensagem: {e}\033[0m")
+
+
+# ---------- ÁREA DE TESTE ----------
 
 barrier = threading.Barrier(3)
 
