@@ -6,6 +6,7 @@ import json
 from pymongo.mongo_client import MongoClient
 from pymongo.server_api import ServerApi
 
+# Link para o Mongo
 uri = "mongodb+srv://brunoab:Yukahagany1!@cluster0.r8nnr.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
 
 from constants import *
@@ -19,7 +20,7 @@ class TipoNo (Enum):
 
 # Nó com conexão par a par
 class NoP2P:
-    def __init__(self, id, role, host, porta_para_nos, porta_para_clientes, vizinhos, barrier):
+    def __init__(self, id, role, host, porta_para_nos, porta_para_clientes, vizinhos, barrier, max_tentativas=5, intervalo_tentativas=1):
         
         """
         host: endereço IP do nó atual.
@@ -41,15 +42,19 @@ class NoP2P:
         self.sockets_acceptors_servers = []
         self.sockets_learners_servers = [] 
 
-        # listas para o processo de consenso do learner
+        # Listas para o processo de consenso do learner
         self.commits_recebidos = {}
         self.commits_processados = set()
 
         # Atributos de transação
         self.barrier = barrier # Barrier para sincronização
         self.preparacao_enviada = False
-        self.TID = 1 # Valor de transação único que será utilizado para prometer ou não, incrementa caso não for prometido 
         self.valor = None
+
+        # Flags de controle
+        self.ocupado = False
+        self.maior_TID = 1
+        self.controle_commit = 1
 
         # Preparação
         self.preparacoes_enviadas = 0
@@ -66,6 +71,16 @@ class NoP2P:
 
         # Socket para escutar conexões
         self.servidor_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+        #testeee
+        # Variável para controlar o proposer ativo
+        self.proposer_ativo = None  # Nenhum proposer ativo no começo
+        self.proposer_lock = threading.Lock()  # Lock para controlar acesso a essa variável
+        
+        # Parâmetros para controle de tentativas
+        self.max_tentativas = max_tentativas
+        self.intervalo_tentativas = intervalo_tentativas
+        #acaba aqui o teste
 
         # Iniciação do servidor
         try:
@@ -97,7 +112,7 @@ class NoP2P:
             # Impede que dois learnes se conectem
             if self.role == TipoNo.LEARNER and vizinho['role'] == TipoNo.LEARNER: 
                 continue
-            
+
             while True:
                 try:               
                     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -181,7 +196,6 @@ class NoP2P:
             mensagem = json.loads(dados.decode())
 
             # Adiciona o TID desse proposer
-            mensagem["TID"] = self.TID
             mensagem["ID"] = self.id
 
             timestamp = mensagem.get('timestamp')
@@ -213,9 +227,6 @@ class NoP2P:
                 print(f"\033[31mErro ao decodificar mensagem: {e}\033[0m")
                 return
 
-            # Atualiza o TID da mensagem
-            mensagem_json['TID'] = self.TID
-
             json_string = json.dumps(mensagem_json)
             json_string = json_string.encode()
             
@@ -235,6 +246,39 @@ class NoP2P:
             self.mandar_accept(json_string)
         else:
             print(f"\033[31mErro: formato inválido de mensagem para mandar_accept: {mensagem}\033[0m")
+
+
+
+    # # Função que tenta fazer um proposer enviar uma preparação --- FUNÇÃO TESTE
+    # def enviar_preparacao(self, mensagem):
+    #     tentativas = 0
+        
+    #     while tentativas < self.max_tentativas:
+    #         with self.proposer_lock:  # Garante que a operação seja atômica
+    #             if self.proposer_ativo is None:
+    #                 # Marca esse nó como o proposer ativo
+    #                 self.proposer_ativo = self.id
+                    
+    #                 print(f"Nó {self.id} é o proposer ativo. Enviando preparação...")
+                    
+    #                 # Envia a mensagem de preparação
+    #                 self.mandar_preparacao(mensagem)
+                    
+    #                 # Após o envio, libera o lock (outros proposers poderão agir)
+    #                 self.proposer_ativo = None
+    #                 return  # Envio bem-sucedido, sai da função
+    #             else:
+    #                 print(f"Nó {self.id} não pode enviar preparação porque o nó {self.proposer_ativo} já está enviando uma solicitação.")
+            
+    #         # Se não conseguiu enviar, espera um intervalo e tenta novamente
+    #         tentativas += 1
+    #         print(f"Tentativa {tentativas}/{self.max_tentativas} falhou. Tentando novamente em {self.intervalo_tentativas} segundos...")
+    #         time.sleep(self.intervalo_tentativas)
+        
+    #     # Caso o número máximo de tentativas seja atingido
+    #     print(f"Nó {self.id} falhou ao tentar enviar a preparação após {self.max_tentativas} tentativas.")
+
+
 
     # Envia uma mensagem de preparação para todos os vizinhos conectados
     def mandar_preparacao(self, mensagem):
@@ -276,9 +320,6 @@ class NoP2P:
                     if tupla_de_resposta[0] == "promise":
                         print(f"\033[32mNó {self.id} recebeu 'promise' de preparação do nó: {element['id']}\033[0m")
                         self.promises_recebidos += 1
-                    # Se receber um "not promise", incrementa o TID pra tentar de novo
-                    else:
-                        self.TID = dicionario['TID'] + 1
                     
                     self.respostas_recebidas += 1
 
@@ -297,7 +338,8 @@ class NoP2P:
         print(f"\033[33mNó {self.id} recebeu preparação: {mensagem}\033[0m")
 
         # Se não tiver prometido nenhum valor ainda, promete esse
-        if self.promised_flag == False or self.TID < mensagem['TID']:
+        if self.promised_flag == False or self.ocupado == False:
+            self.ocupado = True
             self.prometer_preparacao(element, mensagem)
         else:
             self.negar_preparacao(element, mensagem)
@@ -306,7 +348,6 @@ class NoP2P:
     def prometer_preparacao(self, element, mensagem):
         
         self.promised_flag = True
-        self.TID = mensagem['TID'] # atualiza o TID com o TID da mensagem maior
         print(f"\033[32mNó {self.id} prometeu preparação: {mensagem}\033[0m")
         
         mensagem_tupla = ["promise", mensagem] #aqui
@@ -366,13 +407,18 @@ class NoP2P:
         for element in self.sockets_learners_servers:
             element['socket'].send(json_string)
 
+        self.ocupado = False
+
 
     # ---------- ACEITAÇÃO | LADO DO LEARNER ----------
     
     # Verifica se atingiu um consenso das mensagens dos accptors
     def consenso_commit(self, mensagem):
-    
-        tid = mensagem["TID"]
+
+        if self.controle_commit % 2 != 0:
+            mensagem['TID'] = self.maior_TID
+
+        tid = mensagem["TID"] 
         timestamp = mensagem["timestamp"]
 
         if tid not in self.commits_recebidos:
@@ -380,22 +426,32 @@ class NoP2P:
 
         # Incrementa contagem de commits recebidos para esse TID
         self.commits_recebidos[tid]["contagem"] += 1
-        print(f"Learner {self.id} recebeu {self.commits_recebidos[tid]['contagem']} commits para TID {tid}")
 
+        self.controle_commit += 1
         # Verifica se atingiu a maioria para tomar decisão
-        if self.commits_recebidos[tid]["contagem"] >= CONSENSO_LEARNERS and tid not in self.commits_processados:
-            print(f"\033[32mLearner {self.id} atingiu consenso para TID {tid} com timestamp {timestamp}\033[0m")
+        if self.commits_recebidos[tid]["contagem"] >= CONSENSO_LEARNERS and tid not in self.commits_processados and self.controle_commit % 2 == 0:
+            print(f"----------consenso com tid {tid}")
             self.commits_processados.add(tid)
+            self.maior_TID += 1
             return True
         
         print(f"\033[31mLearner {self.id} ainda NÃO atingiu consenso para TID {tid}\033[0m")
+        
+        # Chamando a função enviar_preparacao
+        # if tid not in self.commits_processados:
+        #     print(f"Nó {self.id} ainda não processou o TID {tid}. Enviando preparação...")
+        #     mensagem_de_preparacao = {"TID": tid, "timestamp": timestamp}
+        #     self.enviar_preparacao(mensagem_de_preparacao)
+            
         return False
 
     # Commita e avisa o cliente
     def commitar(self, mensagem):
         self.valor_aprendido = mensagem['valor'] # aprende o valor
-        print(f"\033[32mLearner {self.id} commitando valor {mensagem['valor']} da transação do nó {mensagem['ID']}\033[0m")
-        
+        print(f"\033[32mLearner {self.id} commitando valor {mensagem['valor']} da transação TID = {mensagem['TID']}\033[0m")
+
+        mensagem['TID'] = self.maior_TID
+
         # Conecta ao servidor Mongo
         client = MongoClient(uri, server_api=ServerApi('1'))
         # Escolhe o banco de dados
@@ -436,8 +492,9 @@ class NoP2P:
             # Encerra a conexão
             sock_cliente.close()
 
+
         except Exception as e:
-            print(f"\033[31mEro ao enviar aviso para o cliente: {e}\033[0m")
+            print(f"\033[31mErro ao enviar aviso para o cliente: {e}\033[0m")
             raise
 
     # Recebe uma mensagem de outro nó
@@ -463,21 +520,9 @@ class NoP2P:
                         elif mensagem['tipo'] == "accept":
                             self.processar_accept(mensagem)
                         elif mensagem['tipo'] == "commit":
-                            if mensagem["TID"] not in self.commits_recebidos:
-                                self.commits_recebidos[mensagem["TID"]] = {"contagem": 0}
-
-                            # if mensagem["TID"] != self.TID:
-                            #     print(f"\033[31mLearner {self.id} ignorou commit de TID {mensagem['TID']} (esperado {self.TID})\033[0m")
-                            #     continue  # ignora commits antigos
-
-                            # Print detalhado para depuração
-                            print(f"\033[33mLearner {self.id} recebeu commit para TID {mensagem['TID']} (esperado {self.TID})\033[0m")
-
+                         
                             # Verifica se atingiu consenso
-                            atingiu_consenso = self.consenso_commit(mensagem)
-                            print(f"\033[36mLearner {self.id} consenso para TID {mensagem['TID']}: {atingiu_consenso}\033[0m")
-
-                            if atingiu_consenso:
+                            if self.consenso_commit(mensagem):
                                 self.commitar(mensagem)
 
                     except socket.timeout:

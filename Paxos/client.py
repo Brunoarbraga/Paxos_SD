@@ -21,7 +21,7 @@ class Cliente:
     def enviar_requisicao(self, connection):
         timestamp = time.time_ns() # retorna o tempo em nanossegundos como um inteiro
         valor = random.randint(1, 10000) # valor aleatório da requisição
-        mensagem = {"tipo": "request", "timestamp": timestamp, "valor": valor, "client_id" : self.id, "client_port" : self.porta_client, "client_host" : self.host}
+        mensagem = {"tipo": "request", "timestamp": timestamp, "valor": valor, "client_id" : self.id, "TID" : 1,"client_port" : self.porta_client, "client_host" : self.host}
         mensagem = json.dumps(mensagem)
         print(f"Cliente {self.id} enviando requisição para o nó com timestamp {timestamp} e valor {valor}")
         connection.sendall(mensagem.encode())
