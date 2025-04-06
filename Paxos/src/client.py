@@ -7,15 +7,19 @@ from constants import *
 class Cliente:
     def __init__(self, host, porta_no, porta_client, id=1) -> None:
         self.id = id
-        self.host = host  # ip
+        self.host = host  # service name (no1 - docker compose)
         self.porta_no = porta_no  # porta do nó
         self.porta_client = porta_client  # porta do cliente
         self.commits_recebidos = 0
         self.num_requisicoes = random.randint(3, 3)  # número aleatório de requisições
 
+        self.client_host = socket.gethostbyname(socket.gethostname()) #ip do container
+        print(f"{self.client_host}")
+
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server_socket.bind(('0.0.0.0', self.porta_client))
         self.server_socket.listen()
+        print(f"Client {self.id} listening on {self.client_host}:{self.porta_client}")
 
     # Obtém o timestamp e envia para o nó
     def enviar_requisicao(self, connection):
@@ -27,7 +31,7 @@ class Cliente:
             "valor": valor,
             "client_id": self.id,
             "client_port": self.porta_client,
-            "client_host": self.host
+            "client_host": self.client_host
         }
         mensagem = json.dumps(mensagem)
         print(f"Cliente {self.id} enviando requisição para o nó com timestamp {timestamp} e valor {valor}")

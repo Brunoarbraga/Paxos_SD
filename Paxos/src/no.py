@@ -5,6 +5,7 @@ import time
 import json
 from pymongo.mongo_client import MongoClient
 from pymongo.server_api import ServerApi
+from itertools import chain
 
 uri = "mongodb+srv://brunoab:Yukahagany1!@cluster0.r8nnr.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
 
@@ -408,16 +409,17 @@ class NoP2P:
     # Commita e avisa o cliente
     def commitar(self, mensagem):
         self.valor_aprendido = mensagem['valor'] # aprende o valor
-        print(f"\033[32mLearner {self.id} commitando valor {mensagem['valor']} da transação do nó {mensagem['ID']}\033[0m")
+        print(f"\033[36mLearner {self.id} commitando valor {mensagem['valor']} da transação do nó {mensagem['ID']}\033[0m")
         
         # Conecta ao servidor Mongo
-        client = MongoClient(uri, server_api=ServerApi('1'))
+        #client = MongoClient(uri, server_api=ServerApi('1'))
         # Escolhe o banco de dados
-        db = client["client" + mensagem['client_id']]
+        #db = client["client" + mensagem['client_id']]
         # Escolne uma coleção (só tem uma)
-        colecao = db["transactions"]
+        #colecao = db["transactions"]
         # Insere na coleção
-        colecao.insert_one(mensagem)
+        #colecao.insert_one(mensagem)
+
 
         # Verifica se a mensagem tem infos do cliente
         if "client_host" not in mensagem or "client_port" not in mensagem:
@@ -462,7 +464,7 @@ class NoP2P:
                 time.sleep(1) # aguarda um pouco antes de tentar novamente
                 continue
             
-            for element in self.sockets_acceptors_clients:    
+            for element in chain(self.sockets_acceptors_clients, self.sockets_learners_clients):    
                     element['socket'].settimeout(1)
 
                     try:
