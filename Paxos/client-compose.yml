@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  client1:
+    container_name: cliente_1
+    image: paxos_em:0.1
+    command: python3 -u client.py 1 5010 no1 5001
+    networks:
+      - paxos_network
+
+  client2:
+    container_name: cliente_2
+    image: paxos_em:0.1
+    command: python3 -u client.py 2 5011 no2 5003
+    networks:
+      - paxos_network
+
+  client3:
+    container_name: cliente_3
+    image: paxos_em:0.1
+    command: python3 -u client.py 3 5012 no3 5005
+    networks:
+      - paxos_network
+
+  client4:
+    container_name: cliente_4
+    image: paxos_em:0.1
+    command: python3 -u client.py 4 5013 no4 5007
+    networks:
+      - paxos_network
+
+  client5:
+    container_name: cliente_5
+    image: paxos_em:0.1
+    command: python3 -u client.py 5 5014 no5 5009
+    networks:
+      - paxos_network
+
+networks:
+  paxos_network:
+    driver: bridge

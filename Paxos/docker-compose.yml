@@ -1,0 +1,106 @@
+version: '3.8'
+
+services:
+  no1:
+    image: paxos_em:0.1
+    command: >
+      python3 -u no.py 1 acceptor no1 5000 5001 
+      '[{"id": 1, "role" : "acceptor" , "ip_porta" : ["no1", 5000]},
+        {"id": 2, "role" : "acceptor", "ip_porta": ["no2", 5002]}, 
+        {"id": 3, "role" : "acceptor", "ip_porta": ["no3", 5004]}, 
+        {"id": 4, "role" : "learner", "ip_porta": ["no4", 5006]}, 
+        {"id": 5, "role" : "learner", "ip_porta": ["no5", 5008]}]' 3
+    networks:
+      - paxos_network
+
+  no2:
+    image: paxos_em:0.1
+    command: >
+      python3 -u no.py 2 acceptor no2 5002 5003 
+      '[{"id": 1, "role" : "acceptor" , "ip_porta" : ["no1", 5000]},
+        {"id": 2, "role" : "acceptor", "ip_porta": ["no2", 5002]}, 
+        {"id": 3, "role" : "acceptor", "ip_porta": ["no3", 5004]}, 
+        {"id": 4, "role" : "learner", "ip_porta": ["no4", 5006]}, 
+        {"id": 5, "role" : "learner", "ip_porta": ["no5", 5008]}]' 3
+    networks:
+      - paxos_network
+
+  no3:
+    image: paxos_em:0.1
+    command: >
+      python3 -u no.py 3 acceptor no3 5004 5005 
+      '[{"id": 1, "role" : "acceptor" , "ip_porta" : ["no1", 5000]},
+        {"id": 2, "role" : "acceptor", "ip_porta": ["no2", 5002]}, 
+        {"id": 3, "role" : "acceptor", "ip_porta": ["no3", 5004]}, 
+        {"id": 4, "role" : "learner", "ip_porta": ["no4", 5006]}, 
+        {"id": 5, "role" : "learner", "ip_porta": ["no5", 5008]}]' 3
+    networks:
+      - paxos_network
+
+  no4:
+    image: paxos_em:0.1
+    command: >
+      python3 -u no.py 4 learner no4 5006 5007 
+      '[{"id": 1, "role" : "acceptor" , "ip_porta" : ["no1", 5000]},
+        {"id": 2, "role" : "acceptor", "ip_porta": ["no2", 5002]}, 
+        {"id": 3, "role" : "acceptor", "ip_porta": ["no3", 5004]}, 
+        {"id": 4, "role" : "learner", "ip_porta": ["no4", 5006]}, 
+        {"id": 5, "role" : "learner", "ip_porta": ["no5", 5008]}]' 3
+    networks:
+      - paxos_network
+
+  no5:
+    image: paxos_em:0.1
+    command: >
+      python3 -u no.py 5 learner no5 5008 5009 
+      '[{"id": 1, "role" : "acceptor" , "ip_porta" : ["no1", 5000]},
+        {"id": 2, "role" : "acceptor", "ip_porta": ["no2", 5002]}, 
+        {"id": 3, "role" : "acceptor", "ip_porta": ["no3", 5004]}, 
+        {"id": 4, "role" : "learner", "ip_porta": ["no4", 5006]}, 
+        {"id": 5, "role" : "learner", "ip_porta": ["no5", 5008]}]' 3
+    networks:
+      - paxos_network
+
+  client1:
+    image: paxos_em:0.1
+    command: python3 -u client.py 1 5010 '["no1", 5001]'
+    depends_on:
+      - no1
+    networks:
+      - paxos_network
+
+  client2:
+    image: paxos_em:0.1
+    command: python3 -u client.py 2 5011 no2 5003
+    depends_on:
+      - no2
+    networks:
+      - paxos_network
+
+  client3:
+    image: paxos_em:0.1
+    command: python3 -u client.py 3 5012 no3 5005
+    depends_on:
+      - no3
+    networks:
+      - paxos_network
+
+  client4:
+    image: paxos_em:0.1
+    command: python3 -u client.py 4 5013 no4 5007
+    depends_on:
+      - no4
+    networks:
+      - paxos_network
+
+  client5:
+    image: paxos_em:0.1
+    command: python3 -u client.py 5 5014 no5 5009
+    depends_on:
+      - no5
+    networks:
+      - paxos_network
+
+networks:
+  paxos_network:
+    driver: bridge
