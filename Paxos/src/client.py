@@ -14,7 +14,7 @@ class Cliente:
         self.num_requisicoes = random.randint(3, 3)  # número aleatório de requisições
 
         self.client_host = socket.gethostbyname(socket.gethostname()) #ip do container
-        print(f"{self.client_host}")
+        #print(f"{self.client_host}")
 
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server_socket.bind(('0.0.0.0', self.porta_client))

@@ -3,24 +3,61 @@ import socket
 import threading
 import time
 import json
-from pymongo.mongo_client import MongoClient
-from pymongo.server_api import ServerApi
 from itertools import chain
+import random
 
-uri = "mongodb+srv://brunoab:Yukahagany1!@cluster0.r8nnr.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
 
 from constants import *
 
-# Define o tipo do nó
-class TipoNo (Enum):
-    # Todo nó é naturalmente um PROPOSER
-    ACCEPTOR = 1
-    LEARNER = 2
-    CLIENTE = 3
+class ClusterSync_ClusterStore:
+    def __init__(self, host, porta):
+        self.host = host  # host do no do cluster store
+        self.porta = porta # porta do no do cluster store
+        self.socket_cSync_cStore = None
+
+    def iniciar_conexao(self):
+        # Verifica se o socket é None, recria-o se necessário
+        if self.socket_cSync_cStore is None:
+            self.socket_cSync_cStore = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.socket_cSync_cStore.connect((self.host, self.porta))
+
+
+    def enviar_mensagem(self, mensagem):
+        self.socket_cSync_cStore.sendall(json.dumps(mensagem).encode())
+
+    def esperar_retorno(self):
+        dados = self.socket_cSync_cStore.recv(BUFFER_SIZE)
+        mensagem = json.loads(dados.decode())
+        return mensagem
+        #print(mensagem["status"])
+
+    def finalizar_conexao(self) :
+        self.socket_cSync_cStore.close()
+        self.socket_cSync_cStore = None
+
+class ClusterStore:
+    def __init__(self, lista_endrecos):
+        self.cluster_store = [ClusterSync_ClusterStore(host, porta) for (host, porta) in lista_endrecos]
+    
+    def enviar_mensagem(self, mensagem):
+        selecionado = random.randint(0, len(self.cluster_store) - 1)
+        cluster = self.cluster_store[selecionado]
+
+        cluster.iniciar_conexao()
+        cluster.enviar_mensagem(mensagem)
+        resposta = cluster.esperar_retorno()
+        cluster.finalizar_conexao()
+        return resposta
+
+
+
+
+
 
 # Nó com conexão par a par
 class NoP2P:
     def __init__(self, id, role, host, porta_para_nos, porta_para_clientes, vizinhos, barrier):
+        self.cluster_store = ClusterStore([("cluster0", 10000), ("cluster1", 10001), ("cluster2", 10002)])
         
         """
         host: endereço IP do nó atual.
@@ -220,6 +257,7 @@ class NoP2P:
                 return
 
             # Atualiza o TID da mensagem
+            self.TID += 1
             mensagem_json['TID'] = self.TID
 
             json_string = json.dumps(mensagem_json)
@@ -227,11 +265,14 @@ class NoP2P:
             
             try:
                 # Se tentou mandar a preparação muitas vezes e não deu certo, espera
-                if self.mesma_preparacao > 5:
-                    time.sleep(4)
-                    mensagem_json['TID'] += 1
                 self.mandar_preparacao(json.dumps(mensagem_json).encode())  # Converte para JSON e codifica
                 self.receber_resposta_preparacao(json.dumps(mensagem_json).encode())  
+
+                # Exponential backoff para tentar evitar contenção infinita
+                print(f"Mesma prepração = {self.mesma_preparacao}")
+                if(self.mesma_preparacao > 7):
+                    self.mesma_preparacao = 0
+                time.sleep(random.uniform(0.1, 0.5) * (2 ** self.mesma_preparacao))
 
             except Exception as e:
                 print(f"\033[31mErro ao mandar ou receber preparação: {e}\033[0m")
@@ -239,6 +280,7 @@ class NoP2P:
             if self.promises_recebidos >= CONSENSO_ACCEPTERS:
                 print(f"\033[32mNó {self.id} chegou a um consenso. Mandando accepts\033[0m")
                 self.promised_end_flag = True
+                
         
         self.promised_end_flag = False
         # Garante o formato correto da mensagem antes de enviar
@@ -406,27 +448,29 @@ class NoP2P:
         print(f"\033[31mLearner {self.id} ainda NÃO atingiu consenso para TID {tid}\033[0m")
         return False
 
-    # Commita e avisa o cliente
+
+    # Commita (manda pro cluster store), recebe a resposta e avisa o cliente
     def commitar(self, mensagem):
+
         self.valor_aprendido = mensagem['valor'] # aprende o valor
-        print(f"\033[36mLearner {self.id} commitando valor {mensagem['valor']} da transação do nó {mensagem['ID']}\033[0m")
-        
-        # Conecta ao servidor Mongo
-        #client = MongoClient(uri, server_api=ServerApi('1'))
-        # Escolhe o banco de dados
-        #db = client["client" + mensagem['client_id']]
-        # Escolne uma coleção (só tem uma)
-        #colecao = db["transactions"]
-        # Insere na coleção
-        #colecao.insert_one(mensagem)
-
-
-        # Verifica se a mensagem tem infos do cliente
-        if "client_host" not in mensagem or "client_port" not in mensagem:
-            print(f"\033[31mErro: client_host ou client_port ausente na mensagem {mensagem}\033[0m")
-            return
+        print(f"\033[36mLearner {self.id} commitando valor {mensagem['valor']} da transação do nó {mensagem['ID']} para o Cluster Store\033[0m")
     
-        # Conecta ao cliente
+    
+        # Envia mensagem ao Cluster Store
+        try:
+            resposta = self.cluster_store.enviar_mensagem(mensagem)
+        except Exception as e:
+            print(f"\033[31mEro ao enviar mensagem pro Cluster Store: {e}\033[0m")
+            raise
+
+        # Responde o cliente que mandou a requisição originalmente, falando se a transação deu certo ou não
+        self.responder_cliente(mensagem, resposta.get("status"))
+
+        
+
+
+    def responder_cliente(self, mensagem, success):
+        #reponde o cliente
         try:
             sock_cliente = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
@@ -436,13 +480,22 @@ class NoP2P:
             print("Conexão com o cliente estabelecida!")
 
             # Cria a mensagem de aviso
-            resposta_cliente = {
-                "tipo": "resposta",
-                "status": "sucesso",
-                "mensagem": "Transação confirmada pelo Learner",
-                "TID" : mensagem['TID'],
-                "valor": mensagem['valor']
-            }
+            if success == "success":
+                resposta_cliente = {
+                    "tipo": "resposta",
+                    "status": "Success",
+                    "mensagem": "Transação CONFIRMADA pelo Learner.",
+                    "TID" : mensagem['TID'],
+                    "valor": mensagem['valor']
+                }
+            else:
+                resposta_cliente = {
+                    "tipo": "resposta",
+                    "status": "Fail",
+                    "mensagem": "Transação NEGADA. Tente novamente.",
+                    "TID" : mensagem['TID'],
+                    "valor": mensagem['valor']
+                }
             
             # Envia o aviso para o cliente
             print("Enviando resposta ao cliente...")
@@ -456,6 +509,7 @@ class NoP2P:
         except Exception as e:
             print(f"\033[31mEro ao enviar aviso para o cliente: {e}\033[0m")
             raise
+    
 
     # Recebe uma mensagem de outro nó
     def receber_mensagens(self):
