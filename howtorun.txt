@@ -1,0 +1,5 @@
+sudo docker-compose -f cluster-store-compose.yml down --rmi all
+docker build -t paxos_em:0.1 .
+sudo docker-compose -f no-compose.yml up
+sudo docker-compose -f cluster-store-compose.yml up
+sudo docker-compose -f client-compose.yml up
