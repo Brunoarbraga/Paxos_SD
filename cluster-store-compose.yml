@@ -9,7 +9,7 @@ services:
 
   cluster1:
     image: paxos_em:0.1
-    command: python3 -u noClusterStore.py 1 cluster1 10001 0 0 10011 cluster0 1
+    command: python3 -u noClusterStore.py 1 cluster1 10001 0 0 10011 cluster0 2
     networks:
       - paxos_network
 

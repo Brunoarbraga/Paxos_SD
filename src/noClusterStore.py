@@ -3,23 +3,17 @@ import socket
 import threading
 import time
 import json
-# Bibliotecas para o recurso
-from pymongo.mongo_client import MongoClient
-from pymongo.server_api import ServerApi
-
 import os
 
-# Conexão com o banco (recurso)
-uri = "mongodb+srv://brunoab:Yukahagany1!@cluster0.r8nnr.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
 
 # Definição dos nós do Cluster Store
 class noClusterStore:
-    def __init__(self, id, host, portaRequisicao, porta1 = None, porta2 = None, porta_no_primario = None, host_no_primario = None, queda = None):
+    def __init__(self, id, host, portaRequisicao, porta1 = None, porta2 = None, porta_no_primario = None, host_no_primario = None, cair = None):
         self.id = id
         self.host = host
         self.portaRequisicao = portaRequisicao # porta para receber requisições do cluster sync
         self.primario = True if id == 0 else False # define se o nó eh um nó primário do cluster store ou um nó de backup
-        self.queda = queda
+        self.cair = cair
         self.recurso = []
 
         if self.primario:
@@ -66,7 +60,7 @@ class noClusterStore:
             conexaoPrimarioBackup2.join()
 
             # Derruba o nó primário se a flag for passada como parâmetro no compose
-            if(self.queda == 3):
+            if(self.cair == 3):
                 self.derrubar_no()
             
         else:
@@ -103,7 +97,7 @@ class noClusterStore:
         self.no_clusterSync_socket.listen()
         
         # Derruba o nó backup sem requisição do cliente
-        if self.queda == 1:
+        if self.cair == 1:
             self.derrubar_no()
 
         while True:    
@@ -112,7 +106,7 @@ class noClusterStore:
             with conn:
                 with self.mutex:
                     self.clienteConectado = True
-                    print(f"\033[33mCluster Store ID = {self.id} conectado com o elemento {addr} do cluster sync\033[0m")
+                    print(f"\033[33mCluster Store ID = {self.id} conectado com o elemento {addr} do cluster sync.\033[0m")
         
                 # Recebe e decodifica os dados
                 dados = conn.recv(BUFFER_SIZE)
@@ -126,8 +120,9 @@ class noClusterStore:
                     self.noPrimarioExecutandoRequisicao(mensagem)
                 # Envia a requisição de escrita para o nó primário
                 else:
+                    
                     # Derruba nó primário COM requisição do cliente, antes dele conseguir repassar para o primário
-                    if self.queda == 2:
+                    if self.cair == 2:
                         self.derrubar_no()
 
                     self.no_primario_socket.sendall(json.dumps(mensagem).encode())
@@ -183,7 +178,7 @@ class noClusterStore:
             # Executa a requisição de escrita
             self.recurso.append(mensagem)
             self.exibir_recurso()
-
+        
             # Manda a atualização para os nós de backup
             # Recebe o retorno de reconhecimento da atualização dos nós de backup
             
@@ -193,7 +188,7 @@ class noClusterStore:
                 except:
                     self.backup1_conectado = False
             else:
-                print("\033[31Nó de backup 1 inacessível. Ignorando-o.\033[0m")
+                print("\033[31mNó de backup 1 inacessível. Ignorando-o.\033[0m")
                     
             if no.backup2_conectado:    
                 try:
@@ -201,15 +196,15 @@ class noClusterStore:
                 except:
                     self.backup2_conectado = False
             else:
-                print("\033[31Nó de backup 2 inacessível. Ignorando-o.\033[0m")
+                print("\033[31mNó de backup 2 inacessível. Ignorando-o.\033[0m")
 
         else:
-            print("Atualização realizada no backup")
+            print("\033[36mAtualização realizada no backup\033[0m")
 
     # Recurso atuliza e retorna a confimação de atualização ao nó primário
     def noBackupExecutandoAtualizacao(self, atualizacao):
         # Recebe do nó primário a atualizaação a ser feita
-        self.recurso = atualizacao
+        self.recurso.append(atualizacao)
 
         # Retorna ao nó primário um reconhecimento da atualização
         self.no_primario_socket.sendall(json.dumps("atualização concluída").encode())
@@ -229,9 +224,9 @@ class noClusterStore:
     # Derruba nó para testar o comportamento da conexão Cluster Sync - Cluster Store
     def derrubar_no(self):
         """
-        Queda 1: Derruba o nó backup sem requisição do cliente
-        Queda 2: Derruba o nó backup com requisição do cliente
-        Queda 3: Derruba o nó primário
+        Cair 1: Derruba o nó backup sem requisição do cliente
+        Cair 2: Derruba o nó backup com requisição do cliente
+        Cair 3: Derruba o nó primário
         """
 
         # Simula falha de conexão com os nós de backup
@@ -275,21 +270,21 @@ if __name__ == "__main__":
     if id_no == 0:
         porta1 = int(sys.argv[4]) # porta para conexão do primeiro nó de backup
         porta2 = int(sys.argv[5]) # porta para conexão do segundo nó de backup
-        queda =  int(sys.argv[6]) if len(sys.argv) == 7 else -1 
+        cair =  int(sys.argv[6]) if len(sys.argv) == 7 else -1 
 
-        no = noClusterStore(id_no, host, porta_requisicao, porta1, porta2, queda)
+        no = noClusterStore(id_no, host, porta_requisicao, porta1, porta2, cair)
     
     else:
         porta_no_primario = int(sys.argv[6]) # porta do nó primário
         host_no_primario = sys.argv[7] # host do nó primário
         
-        queda = int(sys.argv[8]) if len(sys.argv) == 9 else -1
+        cair = int(sys.argv[8]) if len(sys.argv) == 9 else -1
 
-        no = noClusterStore(id_no, host, porta_requisicao, None, None, porta_no_primario, host_no_primario, queda)
+        no = noClusterStore(id_no, host, porta_requisicao, None, None, porta_no_primario, host_no_primario, cair)
 
     # Executa o loop principal do nó
     no.executar_no()
 
-    # queda = 1 - nó sem requisição do cliente
-    # queda = 2 - nó com requisição do cliente
-    # queda = 3 - nó primário
+    # cair = 1 - nó sem requisição do cliente
+    # cair = 2 - nó com requisição do cliente
+    # cair = 3 - nó primário

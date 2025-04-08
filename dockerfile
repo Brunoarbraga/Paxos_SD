@@ -6,6 +6,7 @@ RUN apt-get update && \
     apt-get install -y python3 python3-pip
     RUN pip install --break-system-packages pymongo
 
+    RUN apt-get update && apt-get install -y ca-certificates && update-ca-certificates
 # Definir o diretório de trabalho
 WORKDIR /app
 

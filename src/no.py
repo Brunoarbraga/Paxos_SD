@@ -10,7 +10,7 @@ import os
 
 # ---------- CLUSTER SYNC - CLUSTER STORE ----------
 
-class ClusterSync_ClusterStore:
+class Sync_Store:
     def __init__(self, host, porta):
         self.host = host  # host do nó do cluster store
         self.porta = porta # porta do nó do cluster store
@@ -22,13 +22,14 @@ class ClusterSync_ClusterStore:
         # Verifica se o socket é None, e recria-o se necessário
         if self.socket_cSync_cStore is None:
             self.socket_cSync_cStore = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.socket_cSync_cStore.settimeout(3)
+        self.socket_cSync_cStore.settimeout(6)
     
         # Se o elemento do store tiver sido derrubada, a conexão não funciona e retorna -1 para ser tratada onde foi chamada
         try:
             sucesso_conexao = self.socket_cSync_cStore.connect_ex((self.host, self.porta))
             return sucesso_conexao
         except Exception as e:
+            print(f"AAAAAAAAA {e}")
             return -1
 
     # Envia mensagem do Cluster Sync ao Cluster Store
@@ -52,7 +53,7 @@ class ClusterSync_ClusterStore:
 
 class ClusterStore:
     def __init__(self, lista_endrecos):
-        self.cluster_store = [ClusterSync_ClusterStore(host, porta) for (host, porta) in lista_endrecos]
+        self.cluster_store = [Sync_Store(host, porta) for (host, porta) in lista_endrecos]
     
     # Cluster Store envia mensagem de resposta ao Cluster Sync
     def enviar_mensagem(self, mensagem):
@@ -76,19 +77,21 @@ class ClusterStore:
             attempted_indices.add(selecionado) # Mark this one as attempted
             cluster = self.cluster_store[selecionado]
 
-
-
             sucesso = cluster.iniciar_conexao()
 
-
             if sucesso != 0:
-                print(f"\033[41mO CLUSTER STORE ACESSADO FOI DERRUBADO. TENTANDO OUTRO.\033[0m")
+                print(f"\033[41mO CLUSTER STORE {selecionado} ACESSADO FOI DERRUBADO. TENTANDO OUTRO.\033[0m")
                 continue
             else:
-                break
-
-        cluster.enviar_mensagem(mensagem)
-        resposta = cluster.esperar_retorno()
+                try:
+                    cluster.enviar_mensagem(mensagem)
+                    resposta = cluster.esperar_retorno()
+                    break  # Exit loop on success
+                except Exception as e:
+                    print(f"\033[41mCLUSTER STORE FOI DERRUBADO COM A REQUISIÇÃO. MANDANDO PARA OUTRO.\033[0m")
+                    # Force-retry by continuing the loop (will pick a new cluster)
+                    continue
+            
         cluster.finalizar_conexao()
         return resposta
 
@@ -310,7 +313,6 @@ class NoP2P:
                 self.receber_resposta_preparacao(json.dumps(mensagem_json).encode())  
 
                 # Exponential backoff para tentar evitar contenção infinita
-                print(f"Mesma prepração = {self.mesma_preparacao}")
                 if(self.mesma_preparacao > 4): #min 1,6s max 8s
                     self.mesma_preparacao = 0
                 if(self.mesma_preparacao > 2):
@@ -487,7 +489,6 @@ class NoP2P:
             self.commits_processados.add(tid)
             return True
         
-        print(f"\033[31mLearner {self.id} ainda NÃO atingiu consenso para TID {tid}\033[0m")
         return False
 
     # Commita (manda pro Cluster Store), recebe a resposta e avisa o cliente
@@ -539,7 +540,7 @@ class NoP2P:
             # Envia o aviso para o cliente
             print("Enviando resposta ao cliente...")
             sock_cliente.send(json.dumps(resposta_cliente).encode())
-            print("\033[32mResposta enviada com sucesso!\033[0m")
+            print("\033[32mResposta enviada ao cliente com sucesso!\033[0m")
 
             # Encerra a conexão
             sock_cliente.close()
@@ -583,7 +584,6 @@ class NoP2P:
 
                             # Verifica se atingiu consenso
                             atingiu_consenso = self.consenso_commit(mensagem)
-                            print(f"\033[36mLearner {self.id} consenso para TID {mensagem['TID']}: {atingiu_consenso}\033[0m")
 
                             if atingiu_consenso:
                                 self.commitar(mensagem)
