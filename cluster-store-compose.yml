@@ -3,7 +3,7 @@ version: '3.8'
 services:
   cluster0:
     image: paxos_em:0.1
-    command: python3 -u noClusterStore.py 0 cluster0 10000 10011 10012 3
+    command: python3 -u noClusterStore.py 0 cluster0 10000 10011 10012 
     networks:
       - paxos_network
 

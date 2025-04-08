@@ -18,11 +18,18 @@ class ClusterSync_ClusterStore:
 
     # Inicia a conexão entre o Cluster Sync e o Cluster Store
     def iniciar_conexao(self):
+        
         # Verifica se o socket é None, e recria-o se necessário
         if self.socket_cSync_cStore is None:
             self.socket_cSync_cStore = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sucesso_conexao = self.socket_cSync_cStore.connect_ex((self.host, self.porta))
-        return sucesso_conexao
+        self.socket_cSync_cStore.settimeout(3)
+    
+        # Se o elemento do store tiver sido derrubada, a conexão não funciona e retorna -1 para ser tratada onde foi chamada
+        try:
+            sucesso_conexao = self.socket_cSync_cStore.connect_ex((self.host, self.porta))
+            return sucesso_conexao
+        except Exception as e:
+            return -1
 
     # Envia mensagem do Cluster Sync ao Cluster Store
     def enviar_mensagem(self, mensagem):
@@ -62,15 +69,20 @@ class ClusterStore:
             ] 
 
             if not available_indices:
-                print("TODOS OS CLUSTERS FALHARAM! Nenhum cluster disponível.")
+                print("\033[41mTODOS OS CLUSTERS FALHARAM! Nenhum cluster disponível.\033[0m")
                 os._exit(0)
 
             selecionado = random.choice(available_indices)
             attempted_indices.add(selecionado) # Mark this one as attempted
             cluster = self.cluster_store[selecionado]
 
-            if cluster.iniciar_conexao() != 0:
-                print(f"O CLUSTER STORE ACESSADO FOI DERRUBADO. TENTANDO OUTRO.")
+
+
+            sucesso = cluster.iniciar_conexao()
+
+
+            if sucesso != 0:
+                print(f"\033[41mO CLUSTER STORE ACESSADO FOI DERRUBADO. TENTANDO OUTRO.\033[0m")
                 continue
             else:
                 break
@@ -487,12 +499,12 @@ class NoP2P:
         # Envia mensagem ao Cluster Store
         try:
             resposta = self.cluster_store.enviar_mensagem(mensagem)
+            status = resposta.get("status")
         except Exception as e:
-            print(f"\033[41mCLUSTER STORE ESCOLHIDO FOI DERRUBADO: {e}\033[0m") # Ocorre quando o elemento escolhido do store tiver caído
-            raise
+            status = "fail"
 
         # Responde o cliente que mandou a requisição originalmente, falando se a transação deu certo ou não
-        self.responder_cliente(mensagem, resposta.get("status"))
+        self.responder_cliente(mensagem, status)
 
     # Responde o cliente que mandou a requisição
     def responder_cliente(self, mensagem, success):
