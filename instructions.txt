@@ -1,6 +1,10 @@
-Builda iamgem docker:
+Builda iamgem docker (dentro do diretório que contem o dockerfile):
     docker build -t paxos_em:0.1 .
-Executa os containers (dentro da pasta docker-compose):
+Executa os containers (dentro do diretório /docker-compose):
     docker-compose -f no-compose.yml up
     docker-compose -f cluster-store-compose.yml up
     docker-compose -f client-compose.yml up
+
+
+-- Caso necessário, após primeira execução, remova containers órfãos e builde a imagem de novo
+-- sudo docker-compose -f no-compose.yml down --rmi all -v --remove-orphans
