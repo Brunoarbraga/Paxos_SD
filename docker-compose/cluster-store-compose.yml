@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  cluster0:
+    image: paxos_em:0.1
+    command: python3 -u cluster_store/noClusterStore.py 0 cluster0 10000 10011 10012 
+    networks:
+      - paxos_network
+
+  cluster1:
+    image: paxos_em:0.1
+    command: python3 -u cluster_store/noClusterStore.py 1 cluster1 10001 0 0 10011 cluster0 2
+    networks:
+      - paxos_network
+
+  cluster2:
+    image: paxos_em:0.1
+    command: python3 -u cluster_store/noClusterStore.py 2 cluster2 10002 0 0 10012 cluster0
+    networks:
+      - paxos_network
+
+networks:
+  paxos_network:
+    driver: bridge
